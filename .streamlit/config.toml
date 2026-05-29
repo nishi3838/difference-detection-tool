@@ -1,0 +1,4 @@
+[server]
+# XSRF保護を無効化（AxiosError 403の対策）
+enableXsrfProtection = false
+enableCORS = false

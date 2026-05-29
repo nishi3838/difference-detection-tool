@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>ユーザー登録</title>
+</head>
+<body>
+  <h1>ユーザー登録フォーム</h1>
+  <form id="registrationForm" action="/register" method="post">
+
+    <!-- 指名 -->
+    <div class="field">
+      <label for="shimei">お名前 <span class="required">*</span></label>
+      <input
+        type="text"
+        id="shimei"
+        name="shimei"
+        placeholder="例）山田 太郎"
+        maxlength="50"
+        required
+      >
+      <span class="error" id="shimei-error"></span>
+    </div>
+
+    <!-- 指名（カタカナ） -->
+    <div class="field">
+      <label for="shimei_kana">フリガナ <span class="required">*</span></label>
+      <input
+        type="text"
+        id="shimei_kana"
+        name="shimei_kana"
+        placeholder="例）ヤマダ タロウ"
+        maxlength="50"
+        required
+      >
+      <span class="error" id="shimei_kana-error"></span>
+    </div>
+
+    <!-- 生年月日 -->
+    <div class="field">
+      <label for="birthdate">生年月日 <span class="required">*</span></label>
+      <input
+        type="date"
+        id="birthdate"
+        name="birthdate"
+        min="1900-01-01"
+        required
+      >
+      <span class="error" id="birthdate-error"></span>
+    </div>
+
+    <!-- 住所 -->
+    <div class="field">
+      <label for="address">住所 <span class="required">*</span></label>
+      <input
+        type="text"
+        id="address"
+        name="address"
+        placeholder="例）東京都渋谷区1-2-3"
+        maxlength="200"
+        required
+      >
+      <span class="error" id="address-error"></span>
+    </div>
+
+    <button type="submit" id="submitBtn">登録する</button>
+  </form>
+
+  <script>
+    // フォームバリデーション
+    const form = document.getElementById('registrationForm');
+    const submitBtn = document.getElementById('submitBtn');
+
+    function checkFormComplete() {
+      const fields = form.querySelectorAll('input[required]');
+      const allFilled = Array.from(fields).every(f => f.value.trim() !== '');
+      submitBtn.disabled = !allFilled;
+    }
+
+    // カタカナバリデーション
+    document.getElementById('shimei_kana').addEventListener('input', function () {
+      const katakanaOnly = /^[ァ-ヶー\s　]*$/.test(this.value);
+      document.getElementById('shimei_kana-error').textContent =
+        katakanaOnly ? '' : 'カタカナで入力してください';
+    });
+
+    form.querySelectorAll('input').forEach(el => el.addEventListener('input', checkFormComplete));
+    checkFormComplete();
+  </script>
+</body>
+</html>

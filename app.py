@@ -2,9 +2,10 @@
 設計書差分チェックツール
 設計書（PDF / Excel / Word / PowerPoint / Markdown / テキスト）と
 ローカルのソースコードを比較し、差分を自動検出します。
-ローカル DeepSeek モデル（Ollama経由）を使用するため、APIキーは不要です。
+Anthropic Claude API を使用します。
 """
 
+import os
 import streamlit as st
 from datetime import datetime
 from pathlib import Path
@@ -98,6 +99,10 @@ st.markdown(
 .badge-issue  { background:#FEE2E2; color:#DC2626; }
 .badge-review { background:#FEF3C7; color:#D97706; }
 .badge-ok     { background:#D1FAE5; color:#059669; }
+.badge-high   { background:#FEE2E2; color:#DC2626; }
+.badge-medium { background:#FEF3C7; color:#D97706; }
+.badge-low    { background:#DBEAFE; color:#1D4ED8; }
+.badge-na     { background:#F3F4F6; color:#6B7280; }
 
 .tbl-header {
     background: #F9FAFB;
@@ -134,6 +139,13 @@ div[data-testid="stButton"] button[kind="primary"]:hover {
 )
 
 # ────────────────────────────────────────────────────────────
+# API キーの読み込み（secrets.toml → 環境変数の順で取得）
+# ────────────────────────────────────────────────────────────
+_secrets_api_key = st.secrets.get("ANTHROPIC_API_KEY", "") if hasattr(st, "secrets") else ""
+_env_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+_default_api_key = _secrets_api_key or _env_api_key
+
+# ────────────────────────────────────────────────────────────
 # セッション状態の初期化
 # ────────────────────────────────────────────────────────────
 _DEFAULTS = {
@@ -145,6 +157,7 @@ _DEFAULTS = {
     "source_path": "",
     "file_list": [],
     "selected_model": DEFAULT_MODEL,
+    "api_key": _default_api_key,
 }
 for key, val in _DEFAULTS.items():
     if key not in st.session_state:
@@ -171,39 +184,50 @@ def _render_sidebar():
     with st.sidebar:
         st.markdown("### ⚙️ 設定")
 
+        api_key_input = st.text_input(
+            "Anthropic API キー",
+            value=st.session_state.api_key,
+            type="password",
+            help="Anthropic コンソールで発行した API キーを入力してください",
+        )
+        st.session_state.api_key = api_key_input
+
         available_models = get_available_models()
         selected = st.selectbox(
-            "DeepSeek モデル",
+            "Claude モデル",
             options=available_models,
             index=0,
-            help="Ollama でプル済みの DeepSeek モデルを選択してください",
+            help="使用する Claude モデルを選択してください",
         )
         st.session_state.selected_model = selected
 
         st.markdown("---")
-        if st.button("🔌 Ollama 接続テスト", use_container_width=True):
-            try:
-                import ollama
-                ollama.list()
-                st.success("✅ Ollama に接続できました")
-            except Exception:
-                st.error("❌ Ollama に接続できません\n`ollama serve` を実行してください")
+        if st.button("🔌 API 接続テスト", use_container_width=True):
+            if not st.session_state.api_key:
+                st.error("❌ API キーを入力してください")
+            else:
+                try:
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=st.session_state.api_key)
+                    client.models.list()
+                    st.success("✅ Anthropic API に接続できました")
+                except Exception as e:
+                    st.error(f"❌ 接続できません: {e}")
 
         st.markdown("---")
         st.markdown(
             """
             ### 📖 使い方
-            1. 設計書をアップロード
-            2. LLMが仕様項目を抽出・確認
-            3. ソースコードのパスを入力
-            4. 差分チェックを実行
+            1. API キーを入力
+            2. 設計書をアップロード
+            3. LLMが仕様項目を抽出・確認
+            4. ソースコードのパスを入力
+            5. 差分チェックを実行
 
-            ### 対応モデル例
-            ```
-            ollama pull deepseek-r1:7b
-            ollama pull deepseek-r1:14b
-            ollama pull deepseek-coder-v2
-            ```
+            ### 対応モデル
+            - **claude-sonnet-4-6**（推奨）
+            - **claude-haiku-4-5**（高速・低コスト）
+            - **claude-opus-4-8**（最高精度）
             """
         )
 
@@ -280,12 +304,12 @@ def _run_extract(uploaded_file):
             return
 
         model = st.session_state.selected_model
-        status_msg.info(f"🤖 DeepSeek ({model}) で仕様項目を抽出中...  しばらくお待ちください。")
+        status_msg.info(f"🤖 Claude ({model}) で仕様項目を抽出中...  しばらくお待ちください。")
 
         response_text = ""
         items = None
 
-        for chunk in extract_items_from_doc(design_content, model=model):
+        for chunk in extract_items_from_doc(design_content, model=model, api_key=st.session_state.api_key):
             if chunk["type"] == "progress":
                 response_text += chunk["content"]
                 display = response_text[-600:] if len(response_text) > 600 else response_text
@@ -523,14 +547,20 @@ def _run_check(source_path: str):
 
         model = st.session_state.selected_model
         status_msg.info(
-            f"🤖 DeepSeek ({model}) で差分を分析中..."
+            f"🤖 Claude ({model}) で差分を分析中..."
             f"  — {len(file_list)} 個のファイルを検査します。しばらくお待ちください。"
         )
 
         response_text = ""
         results = None
 
-        for chunk in check_differences(design_content, source_content, model=model):
+        for chunk in check_differences(
+            design_content,
+            source_content,
+            model=model,
+            api_key=st.session_state.api_key,
+            extracted_items=st.session_state.extracted_items or None,
+        ):
             if chunk["type"] == "progress":
                 response_text += chunk["content"]
                 display = response_text[-600:] if len(response_text) > 600 else response_text
@@ -566,30 +596,62 @@ def _show_results_inline():
     st.subheader("差分チェック結果")
 
     total = len(results)
-    issue_n = sum(1 for r in results if r["status"] == "問題あり")
-    review_n = sum(1 for r in results if r["status"] == "要確認")
+    high_n = sum(1 for r in results if r.get("severity") == "High")
+    medium_n = sum(1 for r in results if r.get("severity") == "Medium")
+    low_n = sum(1 for r in results if r.get("severity") == "Low")
     ok_n = sum(1 for r in results if r["status"] == "一致")
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("チェック対象", total)
-    c2.metric("問題あり", issue_n)
-    c3.metric("要確認", review_n)
-    c4.metric("一致", ok_n)
+    c2.metric("🔴 High", high_n)
+    c3.metric("🟡 Medium", medium_n)
+    c4.metric("🔵 Low", low_n)
+    c5.metric("✅ 一致", ok_n)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    df = pd.DataFrame(results).rename(
-        columns={
-            "item_name": "項目名",
-            "expected": "設計書（期待）",
-            "actual": "アプリ（実装）",
-            "status": "結果",
-            "details": "詳細",
-        }
+    st.markdown(
+        """
+        <div class="tbl-header">
+          <div style="display:grid; grid-template-columns:2fr 1fr 3fr 1.1fr; gap:0.5rem;">
+            <span>設計書の項目</span>
+            <span>Code側の状態</span>
+            <span>差分</span>
+            <span>結果</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    for item in results:
+        severity = item.get("severity", "N/A")
+        status = item["status"]
+        border_color = _severity_border_color(severity)
+        st.markdown(
+            f"""
+            <div class="tbl-row" style="border-left: 4px solid {border_color};">
+              <div style="display:grid; grid-template-columns:2fr 1fr 3fr 1.1fr; gap:0.5rem; align-items:start;">
+                <span style="font-weight:600">{item['item_name']}</span>
+                <span style="color:#374151">{item.get('code_status', '不明')}</span>
+                <span style="color:#374151">{item.get('difference', '')}</span>
+                <span>{_badge_html(status)}</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    df = pd.DataFrame(results)[["item_name", "code_status", "difference", "status"]].rename(
+        columns={
+            "item_name": "設計書の項目",
+            "code_status": "Code側の状態",
+            "difference": "差分",
+            "status": "結果",
+        }
+    )
     csv = df.to_csv(index=False, encoding="utf-8-sig")
     st.download_button(
         "⬇️ 結果をCSVでダウンロード",
@@ -630,11 +692,10 @@ def _show_results_page():
     with dl_col:
         df = pd.DataFrame(results).rename(
             columns={
-                "item_name": "項目名",
-                "expected": "設計書（期待）",
-                "actual": "アプリ（実装）",
+                "item_name": "設計書の項目",
+                "code_status": "Code側の状態",
+                "difference": "差分",
                 "status": "結果",
-                "details": "詳細",
             }
         )
         csv = df.to_csv(index=False, encoding="utf-8-sig")
@@ -719,10 +780,10 @@ def _show_results_page():
         st.markdown(
             """
             <div class="tbl-header">
-              <div style="display:grid; grid-template-columns:2.2fr 2fr 2fr 1.5fr 0.3fr; gap:0.5rem;">
-                <span>項目名</span>
-                <span>設計書（期待）</span>
-                <span>アプリ（実装）</span>
+              <div style="display:grid; grid-template-columns:2.2fr 1.2fr 3fr 1.5fr 0.3fr; gap:0.5rem;">
+                <span>設計書の項目</span>
+                <span>Code側の状態</span>
+                <span>差分</span>
                 <span>結果</span>
                 <span></span>
               </div>
@@ -769,6 +830,25 @@ def _badge_html(status: str) -> str:
     return f'<span class="badge {cls}">{label}</span>'
 
 
+def _severity_badge_html(severity: str) -> str:
+    configs = {
+        "High":   ("🔴 High",   "badge-high"),
+        "Medium": ("🟡 Medium", "badge-medium"),
+        "Low":    ("🔵 Low",    "badge-low"),
+        "N/A":    ("－ N/A",   "badge-na"),
+    }
+    label, cls = configs.get(severity, ("－ N/A", "badge-na"))
+    return f'<span class="badge {cls}">{label}</span>'
+
+
+def _severity_border_color(severity: str) -> str:
+    return {
+        "High":   "#DC2626",
+        "Medium": "#D97706",
+        "Low":    "#3B82F6",
+    }.get(severity, "#9CA3AF")
+
+
 def _actual_color(status: str) -> str:
     return {"問題あり": "#DC2626", "要確認": "#D97706", "一致": "#059669"}.get(status, "#374151")
 
@@ -779,10 +859,10 @@ def _render_row(item: dict, key: str):
     st.markdown(
         f"""
         <div class="tbl-row">
-          <div style="display:grid; grid-template-columns:2.2fr 2fr 2fr 1.5fr 0.3fr; gap:0.5rem; align-items:center;">
+          <div style="display:grid; grid-template-columns:2.2fr 1.2fr 3fr 1.5fr 0.3fr; gap:0.5rem; align-items:center;">
             <span style="font-weight:600">{item['item_name']}</span>
-            <span style="color:#374151">{item['expected']}</span>
-            <span style="color:{_actual_color(status)}">{item['actual']}</span>
+            <span style="color:#374151">{item.get('code_status', '不明')}</span>
+            <span style="color:{_actual_color(status)}">{item.get('difference', '')}</span>
             <span>{_badge_html(status)}</span>
             <span></span>
           </div>
@@ -790,15 +870,6 @@ def _render_row(item: dict, key: str):
         """,
         unsafe_allow_html=True,
     )
-
-    if item.get("details"):
-        with st.expander("📝 詳細を表示", expanded=False):
-            st.markdown(
-                f"<div style='background:#F9FAFB; border-radius:8px; padding:0.8rem 1rem; color:#374151;'>"
-                f"{item['details']}"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
 
 
 def _render_pagination(current_page: int, total_pages: int):
